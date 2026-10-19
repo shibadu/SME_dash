@@ -261,11 +261,14 @@ with tabs[0]:
         if rc.empty:
             st.caption("No recommendations yet")
         else:
-            fig = px.bar(rc, x="Recommendation", y="Respondents", text="Respondents", color="Recommendation",
-                         color_discrete_map=REC_COLORS, title="Recommendation")
+            total = rc["Respondents"].sum()
+            rc["Label"] = rc["Respondents"].astype(int).astype(str) + " (" + (rc["Respondents"] / total * 100).round(1).astype(str) + "%)"
+            fig = px.bar(rc.iloc[::-1], x="Respondents", y="Recommendation", orientation="h", text="Label",
+                         color="Recommendation", color_discrete_map=REC_COLORS, title="Recommendation, n (%)")
             fig.update_traces(textposition="outside", cliponaxis=False)
-            fig.update_layout(height=340, showlegend=False, margin=dict(l=0, r=0, t=50, b=0),
-                              xaxis_title=None, yaxis_title=None, title_font_size=15)
+            fig.update_layout(height=340, showlegend=False, margin=dict(l=0, r=20, t=50, b=0),
+                              xaxis_title=None, yaxis_title=None, title_font_size=15,
+                              xaxis_range=[0, rc["Respondents"].max() * 1.25])
             st.plotly_chart(fig, width="stretch")
 
     c3, c4 = st.columns(2)
@@ -291,13 +294,6 @@ with tabs[0]:
             fig.update_layout(height=320, margin=dict(l=0, r=20, t=50, b=0), xaxis_range=[0, 110],
                               xaxis_title=None, yaxis_title=None, title_font_size=15)
             st.plotly_chart(fig, width="stretch")
-
-    if df["submitted"].notna().any():
-        daily = df.set_index("submitted").resample("W").size().rename("Submissions").reset_index()
-        fig = px.line(daily, x="submitted", y="Submissions", markers=True, title="Submissions per week")
-        fig.update_traces(line_color=NAVY)
-        fig.update_layout(height=280, margin=dict(l=0, r=0, t=50, b=0), xaxis_title=None, title_font_size=15)
-        st.plotly_chart(fig, width="stretch")
 
 # ---------------------------- Expertise -------------------------------------
 with tabs[1]:
