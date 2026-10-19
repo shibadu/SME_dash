@@ -214,7 +214,6 @@ st.markdown(f"<h1 style='color:{NAVY};margin-bottom:0'>SME Assessment Dashboard<
 st.caption("Subject matter expert matching - live from KoboToolbox")
 
 with st.sidebar:
-    st.header("Filters")
     if st.button("Refresh data", width="stretch"):
         load_data.clear()
         st.rerun()
@@ -227,29 +226,6 @@ if raw.empty:
     st.stop()
 
 df = prepare(raw)
-
-with st.sidebar:
-    if df["submitted"].notna().any():
-        dmin, dmax = df["submitted"].min().date(), df["submitted"].max().date()
-        dr = st.date_input("Submission date", (dmin, dmax), min_value=dmin, max_value=dmax)
-        if isinstance(dr, tuple) and len(dr) == 2:
-            df = df[(df["submitted"].dt.date >= dr[0]) & (df["submitted"].dt.date <= dr[1])]
-    sel_rec = st.multiselect("Recommendation", REC_ORDER)
-    if sel_rec:
-        df = df[df["rec"].isin(sel_rec)]
-    sel_primary = st.multiselect("Primary area of expertise", sorted(df["primary_area"].dropna().unique()))
-    if sel_primary:
-        df = df[df["primary_area"].isin(sel_primary)]
-    sel_aligned = st.multiselect("Area respondent feels most aligned to", sorted(df["aligned_area"].dropna().unique()))
-    if sel_aligned:
-        df = df[df["aligned_area"].isin(sel_aligned)]
-    if df["total_score"].notna().any():
-        lo, hi = st.slider("Total score range", 0.0, 100.0, (0.0, 100.0), step=1.0)
-        df = df[df["total_score"].isna() | df["total_score"].between(lo, hi)]
-
-if df.empty:
-    st.warning("No submissions match the current filters.")
-    st.stop()
 
 scored = df[df["total_score"].notna()]
 consented = df[df["consent"] == "yes"]
@@ -399,7 +375,7 @@ with tabs[4]:
 
 # ------------------------------- Data ---------------------------------------
 with tabs[5]:
-    st.caption("All submissions after filters (question names without group prefixes).")
+    st.caption("All submissions (question names shown without group prefixes).")
     st.dataframe(df.drop(columns=["submitted", "rec", "primary_area", "aligned_area"], errors="ignore"),
                  width="stretch", hide_index=True)
     st.download_button("Download data (CSV)", df.to_csv(index=False).encode("utf-8"),
