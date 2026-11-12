@@ -79,6 +79,49 @@ SCORE_PARTS = {  # column -> (label, max points)
 }
 
 
+# ---- Policy & Advocacy (scored separately from the SME fit score) ----------
+# Each question's score = average of its response-option ratings (each rated 1-4),
+# so every question is out of 4 and the 3 questions total out of 12.
+# "Other (specify)" options are optional and are not scored.
+PA_DOMAINS = {
+    "Evidence-to-Policy Translation": {
+        "pa1_moh": "Ministry of Health", "pa1_county": "County governments", "pa1_donors": "Donors",
+        "pa1_ips": "Implementing partners", "pa1_community": "Community groups / Public",
+    },
+    "Policy Engagement & Advocacy": {
+        "pa2_policymakers": "Policymakers", "pa2_prof_bodies": "Professional bodies",
+        "pa2_twg": "Technical working groups",
+    },
+    "Strategic Communication of Evidence": {
+        "pa3_briefs": "Policy briefs", "pa3_present": "Presentations (conferences)",
+        "pa3_media": "Media engagement", "pa3_forums": "Stakeholder forums",
+        "pa3_social": "Public dissemination (social media)",
+    },
+}
+PA_QCOLS = ["pa_q1", "pa_q2", "pa_q3"]
+PA_INTEREST = {"yes": "Yes", "yes_support": "Yes, with additional training/support",
+               "not_now": "Not currently", "unsure": "Unsure"}
+PA_LEVELS = [  # (minimum total, label) - checked from the top
+    (10, "Policy & Advocacy SME"),
+    (7, "Emerging SME / Advanced Practitioner"),
+    (4, "Foundational Competency"),
+    (0, "Beginner"),
+]
+PA_LEVEL_ORDER = [lab for _, lab in PA_LEVELS]
+PA_LEVEL_COLORS = {
+    "Policy & Advocacy SME": "#548235", "Emerging SME / Advanced Practitioner": "#2E75B6",
+    "Foundational Competency": "#BF9000", "Beginner": "#C55A11",
+}
+
+
+def pa_level(total):
+    if pd.isna(total):
+        return pd.NA
+    for floor, label in PA_LEVELS:
+        if total >= floor:
+            return label
+
+
 # ----------------------------------------------------------------------------
 # Password gate
 # ----------------------------------------------------------------------------
@@ -145,6 +188,20 @@ def prepare(df: pd.DataFrame) -> pd.DataFrame:
     df["rec"] = df["rec_code"].map(REC)
     df["primary_area"] = df["b1_primary"].map(AREAS_B1).fillna(df["b1_primary"])
     df["aligned_area"] = df["target_area"].map(AREAS_B1).fillna(df["target_area"])
+
+    # Policy & Advocacy: item ratings (1-4) -> question average (out of 4) -> total (out of 12)
+    for i, items in enumerate(PA_DOMAINS.values(), start=1):
+        cols = list(items)
+        for c in cols:
+            if c not in df.columns:
+                df[c] = float("nan")
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+        df[f"pa_q{i}"] = df[cols].mean(axis=1).where(df[cols].notna().all(axis=1))
+    df["pa_total"] = df[PA_QCOLS].sum(axis=1, min_count=3)
+    df["pa_level"] = df["pa_total"].map(pa_level)
+    if "pa4_sme_interest" not in df.columns:
+        df["pa4_sme_interest"] = pd.NA
+    df["pa_interest"] = df["pa4_sme_interest"].map(PA_INTEREST)
     return df
 
 
@@ -242,7 +299,7 @@ k[3].metric("Scored", len(scored))
 k[4].metric("Strong fit", int((df["rec_code"] == "strong").sum()))
 k[5].metric("Average score", f"{scored['total_score'].mean():.1f}" if len(scored) else "-")
 
-tabs = st.tabs(["Overview", "Expertise", "Background & capacity", "SME shortlist", "Follow-up", "Data"])
+tabs = st.tabs(["Overview", "Expertise", "Background & capacity", "Policy & Advocacy", "SME shortlist", "Follow-up", "Data"])
 
 # ---------------------------- Overview --------------------------------------
 with tabs[0]:
@@ -261,14 +318,11 @@ with tabs[0]:
         if rc.empty:
             st.caption("No recommendations yet")
         else:
-            total = rc["Respondents"].sum()
-            rc["Label"] = rc["Respondents"].astype(int).astype(str) + " (" + (rc["Respondents"] / total * 100).round(1).astype(str) + "%)"
-            fig = px.bar(rc.iloc[::-1], x="Respondents", y="Recommendation", orientation="h", text="Label",
-                         color="Recommendation", color_discrete_map=REC_COLORS, title="Recommendation, n (%)")
+            fig = px.bar(rc, x="Recommendation", y="Respondents", text="Respondents", color="Recommendation",
+                         color_discrete_map=REC_COLORS, title="Recommendation")
             fig.update_traces(textposition="outside", cliponaxis=False)
-            fig.update_layout(height=340, showlegend=False, margin=dict(l=0, r=20, t=50, b=0),
-                              xaxis_title=None, yaxis_title=None, title_font_size=15,
-                              xaxis_range=[0, rc["Respondents"].max() * 1.25])
+            fig.update_layout(height=340, showlegend=False, margin=dict(l=0, r=0, t=50, b=0),
+                              xaxis_title=None, yaxis_title=None, title_font_size=15)
             st.plotly_chart(fig, width="stretch")
 
     c3, c4 = st.columns(2)
@@ -294,6 +348,13 @@ with tabs[0]:
             fig.update_layout(height=320, margin=dict(l=0, r=20, t=50, b=0), xaxis_range=[0, 110],
                               xaxis_title=None, yaxis_title=None, title_font_size=15)
             st.plotly_chart(fig, width="stretch")
+
+    if df["submitted"].notna().any():
+        daily = df.set_index("submitted").resample("W").size().rename("Submissions").reset_index()
+        fig = px.line(daily, x="submitted", y="Submissions", markers=True, title="Submissions per week")
+        fig.update_traces(line_color=NAVY)
+        fig.update_layout(height=280, margin=dict(l=0, r=0, t=50, b=0), xaxis_title=None, title_font_size=15)
+        st.plotly_chart(fig, width="stretch")
 
 # ---------------------------- Expertise -------------------------------------
 with tabs[1]:
@@ -340,8 +401,107 @@ with tabs[2]:
         vbar(single_counts(base["e1_grant_training"], YESNO, list(YESNO)), "Trained in grant writing (E1)")
     hbar(multi_counts(base["f2_support"], SUPPORT) if "f2_support" in base else pd.DataFrame(), "Support needed (F2)")
 
-# ---------------------------- Shortlist -------------------------------------
+# ------------------------- Policy & Advocacy --------------------------------
 with tabs[3]:
+    pa = df[df["pa_total"].notna()]
+    st.caption("Scored separately from the SME fit score. Each question is the average of its response-option "
+               "ratings (1-4), so each question is out of 4 and the three questions total out of 12.")
+    with st.expander("How the total is interpreted"):
+        st.markdown(
+            "**Total score interpretation for the 3 questions (max 12)**\n"
+            "- **10-12 points:** Policy & Advocacy SME\n"
+            "- **7-9 points:** Emerging SME / Advanced Practitioner\n"
+            "- **4-6 points:** Foundational Competency, requires targeted development\n"
+            "- **3 points or less:** Beginner, requires structured capacity building\n\n"
+            "Averages are not whole numbers, so a total is placed in the band whose lower limit it has "
+            "reached (e.g. 9.6 is Emerging SME; 10.0 is Policy & Advocacy SME). 'Other (specify)' options are not scored.")
+    if pa.empty:
+        st.info("No completed Policy & Advocacy responses yet.")
+    else:
+        k = st.columns(5)
+        k[0].metric("Completed Policy & Advocacy", len(pa))
+        k[1].metric("Average total (of 12)", f"{pa['pa_total'].mean():.1f}")
+        k[2].metric("Policy & Advocacy SMEs", int((pa["pa_level"] == PA_LEVEL_ORDER[0]).sum()))
+        k[3].metric("Emerging SME / Advanced", int((pa["pa_level"] == PA_LEVEL_ORDER[1]).sum()))
+        k[4].metric("Need development / capacity building", int(pa["pa_level"].isin(PA_LEVEL_ORDER[2:]).sum()))
+
+        c1, c2 = st.columns(2)
+        with c1:
+            lv = pa["pa_level"].value_counts().reindex(PA_LEVEL_ORDER).fillna(0).astype(int)
+            lv = lv.rename_axis("Level").reset_index(name="Respondents")
+            fig = px.bar(lv, x="Level", y="Respondents", text="Respondents", color="Level",
+                         color_discrete_map=PA_LEVEL_COLORS, title="Competency level (total out of 12)")
+            fig.update_traces(textposition="outside", cliponaxis=False)
+            fig.update_layout(height=340, showlegend=False, margin=dict(l=0, r=0, t=50, b=0),
+                              xaxis_title=None, yaxis_title=None, title_font_size=15)
+            st.plotly_chart(fig, width="stretch")
+        with c2:
+            dom = pd.DataFrame({"Domain": list(PA_DOMAINS), "Average (of 4)": [pa[c].mean() for c in PA_QCOLS]})
+            fig = px.bar(dom.sort_values("Average (of 4)"), x="Average (of 4)", y="Domain", orientation="h",
+                         text="Average (of 4)", title="Average score by question (out of 4)")
+            fig.update_traces(marker_color="#2E75B6", texttemplate="%{text:.2f}", textposition="outside", cliponaxis=False)
+            fig.update_layout(height=340, margin=dict(l=0, r=20, t=50, b=0), xaxis_range=[0, 4.4],
+                              xaxis_title=None, yaxis_title=None, title_font_size=15)
+            st.plotly_chart(fig, width="stretch")
+
+        # item-level view: average rating and rating distribution per response option
+        rows, dist = [], []
+        for dname, items in PA_DOMAINS.items():
+            for col, lab in items.items():
+                rows.append({"Domain": dname, "Option": lab, "Average (of 4)": pa[col].mean()})
+                vc = pa[col].value_counts()
+                for r in (1, 2, 3, 4):
+                    dist.append({"Domain": dname, "Option": lab, "Rating": str(r), "Respondents": int(vc.get(r, 0))})
+        items_df, dist_df = pd.DataFrame(rows), pd.DataFrame(dist)
+        c3, c4 = st.columns(2)
+        with c3:
+            fig = px.bar(items_df, x="Average (of 4)", y="Option", color="Domain", orientation="h",
+                         text="Average (of 4)", title="Average rating by response option (out of 4)",
+                         color_discrete_sequence=PALETTE, category_orders={"Option": items_df["Option"].tolist()[::-1]})
+            fig.update_traces(texttemplate="%{text:.2f}", textposition="outside", cliponaxis=False)
+            fig.update_layout(height=520, margin=dict(l=0, r=20, t=50, b=0), xaxis_range=[0, 4.5],
+                              xaxis_title=None, yaxis_title=None, title_font_size=15, legend_title=None,
+                              legend=dict(orientation="h", y=-0.12))
+            st.plotly_chart(fig, width="stretch")
+        with c4:
+            fig = px.bar(dist_df, x="Respondents", y="Option", color="Rating", orientation="h",
+                         title="Rating distribution by response option (1 = lowest, 4 = highest)",
+                         color_discrete_map={"1": "#C55A11", "2": "#BF9000", "3": "#9DC3E6", "4": "#1F3864"},
+                         category_orders={"Rating": ["1", "2", "3", "4"], "Option": items_df["Option"].tolist()[::-1]})
+            fig.update_layout(height=520, margin=dict(l=0, r=0, t=50, b=0), xaxis_title=None, yaxis_title=None,
+                              title_font_size=15, legend_title="Rating", legend=dict(orientation="h", y=-0.12))
+            st.plotly_chart(fig, width="stretch")
+
+        c5, c6 = st.columns(2)
+        with c5:
+            hbar(single_counts(pa["pa4_sme_interest"], PA_INTEREST, list(PA_INTEREST)),
+                 "Willing to serve as internal policy & advocacy SME / mentor (PA4)", 300)
+        with c6:
+            fig = px.histogram(pa, x="pa_total", nbins=9, range_x=[3, 12], title="Total score distribution (3-12)")
+            fig.update_traces(marker_color=NAVY)
+            fig.update_layout(height=300, margin=dict(l=0, r=0, t=50, b=0), xaxis_title="Total (of 12)",
+                              yaxis_title="Respondents", title_font_size=15, bargap=0.05)
+            st.plotly_chart(fig, width="stretch")
+
+        st.subheader("Respondent ranking")
+        st.caption("Contains personal contact details - handle accordingly.")
+        rk = pa.sort_values("pa_total", ascending=False)
+        out = pd.DataFrame({
+            "Rank": range(1, len(rk) + 1),
+            "Name": rk["respondent_name"].values, "Contact": rk["respondent_contact"].values,
+            **{f"{d} (of 4)": rk[c].round(2).values for d, c in zip(PA_DOMAINS, PA_QCOLS)},
+            "Total (of 12)": rk["pa_total"].round(2).values,
+            "Level": rk["pa_level"].values,
+            "Willing to be PA SME / mentor": rk["pa_interest"].values,
+        })
+        st.dataframe(out, width="stretch", hide_index=True,
+                     column_config={"Total (of 12)": st.column_config.ProgressColumn(
+                         "Total (of 12)", min_value=0, max_value=12, format="%.2f")})
+        st.download_button("Download Policy & Advocacy results (CSV)", out.to_csv(index=False).encode("utf-8"),
+                           "policy_advocacy_results.csv", "text/csv")
+
+# ---------------------------- Shortlist -------------------------------------
+with tabs[4]:
     st.caption("Ranked by total score. Contains personal contact details - handle accordingly.")
     sl = scored.sort_values("total_score", ascending=False).copy()
     sl["Rank"] = range(1, len(sl) + 1)
@@ -358,7 +518,7 @@ with tabs[3]:
                        "sme_shortlist.csv", "text/csv")
 
 # ----------------------------- Follow-up ------------------------------------
-with tabs[4]:
+with tabs[5]:
     fu = df[df["rec_code"] == "followup"]
     st.metric("Respondents requesting more information", len(fu))
     if len(fu):
@@ -370,7 +530,7 @@ with tabs[4]:
         st.caption("No follow-up requests.")
 
 # ------------------------------- Data ---------------------------------------
-with tabs[5]:
+with tabs[6]:
     st.caption("All submissions (question names shown without group prefixes).")
     st.dataframe(df.drop(columns=["submitted", "rec", "primary_area", "aligned_area"], errors="ignore"),
                  width="stretch", hide_index=True)
