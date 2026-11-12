@@ -483,22 +483,36 @@ with tabs[3]:
                               yaxis_title="Respondents", title_font_size=15, bargap=0.05)
             st.plotly_chart(fig, width="stretch")
 
-        st.subheader("Respondent ranking")
-        st.caption("Contains personal contact details - handle accordingly.")
-        rk = pa.sort_values("pa_total", ascending=False)
-        out = pd.DataFrame({
+        st.subheader("Policy & Advocacy list")
+        st.caption("Filter the list, then download it as a CSV. Contains personal contact details - handle accordingly.")
+        f1, f2, f3 = st.columns(3)
+        lv_sel = f1.multiselect("Level", PA_LEVEL_ORDER, default=PA_LEVEL_ORDER, key="pa_lv")
+        int_opts = list(PA_INTEREST.values()) + ["Not answered"]
+        int_sel = f2.multiselect("Willing to be PA SME / mentor (PA4)", int_opts, default=int_opts, key="pa_int")
+        min_tot = f3.slider("Minimum total (of 12)", 3.0, 12.0, 3.0, 0.5, key="pa_min")
+        rk = pa.assign(_int=pa["pa_interest"].fillna("Not answered"))
+        rk = rk[rk["pa_level"].isin(lv_sel) & rk["_int"].isin(int_sel) & (rk["pa_total"] >= min_tot)]
+        rk = rk.sort_values("pa_total", ascending=False)
+        item_cols = [c for items in PA_DOMAINS.values() for c in items]
+        full = pd.DataFrame({
             "Rank": range(1, len(rk) + 1),
+            "Submitted": rk["submitted"].dt.strftime("%Y-%m-%d").values,
             "Name": rk["respondent_name"].values, "Contact": rk["respondent_contact"].values,
             **{f"{d} (of 4)": rk[c].round(2).values for d, c in zip(PA_DOMAINS, PA_QCOLS)},
             "Total (of 12)": rk["pa_total"].round(2).values,
             "Level": rk["pa_level"].values,
             "Willing to be PA SME / mentor": rk["pa_interest"].values,
+            **{c: rk[c].values for c in item_cols},
         })
-        st.dataframe(out, width="stretch", hide_index=True,
-                     column_config={"Total (of 12)": st.column_config.ProgressColumn(
-                         "Total (of 12)", min_value=0, max_value=12, format="%.2f")})
-        st.download_button("Download Policy & Advocacy results (CSV)", out.to_csv(index=False).encode("utf-8"),
-                           "policy_advocacy_results.csv", "text/csv")
+        st.caption(f"{len(full)} of {len(pa)} respondent(s) match. The CSV also includes the rating for each response option.")
+        if full.empty:
+            st.info("No respondents match the selected filters.")
+        else:
+            st.dataframe(full[list(full.columns[:len(full.columns) - len(item_cols)])], width="stretch", hide_index=True,
+                         column_config={"Total (of 12)": st.column_config.ProgressColumn(
+                             "Total (of 12)", min_value=0, max_value=12, format="%.2f")})
+            st.download_button("Download Policy & Advocacy list (CSV)", full.to_csv(index=False).encode("utf-8"),
+                               "policy_advocacy_list.csv", "text/csv")
 
 # ---------------------------- Shortlist -------------------------------------
 with tabs[4]:
